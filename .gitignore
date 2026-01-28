@@ -1,0 +1,13 @@
+node_modules/
+.env
+.DS_Store
+*.log
+dist/
+build/
+.vscode/
+.idea/
+
+MIGRATION_FIX.md
+PLAN.md
+PROJECT_SUMMARY.md
+SETUP.md
