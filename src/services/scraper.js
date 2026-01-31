@@ -12,11 +12,11 @@ const HEADERS = {
 // MoneyControl URLs to scrape
 export const MONEYCONTROL_URLS = [
   'https://www.moneycontrol.com/news/business/personal-finance/',
-  // 'https://www.moneycontrol.com/banking/',
-  // 'https://www.moneycontrol.com/news/india/',
-  // 'https://www.moneycontrol.com/city/',
+  'https://www.moneycontrol.com/banking/',
+  'https://www.moneycontrol.com/news/india/',
+  'https://www.moneycontrol.com/city/',
   // 'https://www.moneycontrol.com/world/',
-  'https://www.moneycontrol.com/news/politics/',
+  // 'https://www.moneycontrol.com/news/politics/',
   // 'https://www.moneycontrol.com/defence/',
   'https://www.moneycontrol.com/news/business/economy/'
 ];

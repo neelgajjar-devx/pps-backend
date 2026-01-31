@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { scrapeAllMoneyControl } from './scraper.js';
 import { generatePostEmbedding } from './embedding.js';
 import { classifyArticle } from './classifier.js';
+import { transformContentToQA } from './contentTransformer.js';
 import { postExists, insertPost, updatePostClassification } from '../models/post.js';
 
 /**
@@ -39,30 +40,41 @@ async function runScrapingAndClassificationJob() {
       return;
     }
 
-    // Step 3: Generate embeddings and store posts
-    console.log('🧮 Step 3: Generating embeddings and storing posts...');
+    // Step 3: Generate embeddings from RAW content, then transform to Q&A and store posts
+    console.log('📝 Step 3: Generating embeddings from raw content, transforming to Q&A, and storing posts...');
     const storedPosts = [];
     for (const post of newPosts) {
       try {
-        // Generate embedding using Ollama (embeddinggemma - 768 dimensions)
+        // 3a. Generate embedding from RAW content (Ollama embeddinggemma - 768 dimensions)
+        console.log(`   🧮 Generating embedding from raw content: ${post.title.substring(0, 50)}...`);
         const embedding_v2 = await generatePostEmbedding(post);
-        
-        // Store post with embedding_v2 (Ollama embeddinggemma)
+
+        // 3b. Transform raw content into Q&A / tabular explainer format (LLM completes fully before next step)
+        console.log(`   🔄 Transforming to Q&A: ${post.title.substring(0, 50)}...`);
+        let contentToStore = post.content;
+        try {
+          contentToStore = await transformContentToQA(post);
+          console.log(`   ✅ Q&A transform done: ${post.title.substring(0, 50)}...`);
+        } catch (transformError) {
+          console.error(`   ⚠️ Q&A transform failed, storing raw content: ${transformError.message}`);
+        }
+
+        const postWithTransformedContent = { ...post, content: contentToStore };
+
+        // 3c. Store post with TRANSFORMED content and embedding from RAW content
         const storedPost = await insertPost({
-          ...post,
-          embedding: null,      // Keep old embedding field null (OpenAI ada-002 deprecated)
-          embedding_v2,          // Store new Ollama embeddinggemma embeddings here
-          is_interesting: null // Will be classified next
+          ...postWithTransformedContent,
+          embedding: null,
+          embedding_v2,
+          is_interesting: null
         });
-        
+
         storedPosts.push(storedPost);
         console.log(`✅ Stored: ${post.title.substring(0, 50)}...`);
-        
-        // Small delay to avoid rate limiting
+
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (error) {
         console.error(`❌ Error processing post ${post.title}:`, error.message);
-        // Store without embedding if embedding fails
         try {
           const storedPost = await insertPost({
             ...post,
