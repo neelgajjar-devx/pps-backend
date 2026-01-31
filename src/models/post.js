@@ -69,16 +69,16 @@ export async function insertPost(postData) {
 }
 
 /**
- * Update post's is_interesting field
+ * Update post's is_interesting and metadata fields (merge metadata with existing).
  * @param {number} postId - Post ID
  * @param {boolean|null} isInteresting - Classification result
- * @param {Object} classificationData - Additional classification data
- * @returns {Promise<Object>} Updated post
+ * @param {Object} classificationData - Metadata to merge (e.g. reasoning, content_pillar, policy_anchor, or any keys)
+ * @returns {Promise<Object|null>} Updated post or null if not found
  */
 export async function updatePostClassification(postId, isInteresting, classificationData = {}) {
-  const metadata = classificationData.reasoning || classificationData.content_pillar || classificationData.policy_anchor
-    ? { ...classificationData }
-    : null;
+  const metadataJson = classificationData && Object.keys(classificationData).length > 0
+    ? JSON.stringify(classificationData)
+    : '{}';
 
   const result = await pool.query(
     `UPDATE posts 
@@ -87,14 +87,10 @@ export async function updatePostClassification(postId, isInteresting, classifica
          updated_at = CURRENT_TIMESTAMP
      WHERE id = $3
      RETURNING *`,
-    [
-      isInteresting,
-      metadata ? JSON.stringify(metadata) : '{}',
-      postId
-    ]
+    [isInteresting, metadataJson, postId]
   );
 
-  return result.rows[0];
+  return result.rows.length > 0 ? result.rows[0] : null;
 }
 
 /**
@@ -148,6 +144,31 @@ export async function getPosts(filters = {}) {
 
   const result = await pool.query(query, params);
   return result.rows;
+}
+
+/**
+ * Update a post by ID (partial update - only provided fields are updated)
+ * @param {number} postId - Post ID
+ * @param {Object} updates - Fields to update: title, content, url, author, published_at, is_interesting, metadata
+ * @returns {Promise<Object|null>} Updated post or null if not found
+ */
+export async function updatePost(postId, updates) {
+  const allowed = ['title', 'content', 'url', 'author', 'published_at', 'is_interesting', 'metadata'];
+  const keys = Object.keys(updates).filter(k => allowed.includes(k) && updates[k] !== undefined);
+  if (keys.length === 0) return getPostById(postId);
+
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+  const values = keys.map(k => {
+    if (k === 'metadata' && updates[k] != null) return JSON.stringify(updates[k]);
+    return updates[k];
+  });
+  values.push(postId);
+
+  const result = await pool.query(
+    `UPDATE posts SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = $${keys.length + 1} RETURNING *`,
+    values
+  );
+  return result.rows.length > 0 ? result.rows[0] : null;
 }
 
 /**

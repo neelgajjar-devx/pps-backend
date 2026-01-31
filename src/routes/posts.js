@@ -1,5 +1,5 @@
 import express from 'express';
-import { getPosts, getPostCount, getPostById } from '../models/post.js';
+import { getPosts, getPostCount, getPostById, updatePostClassification } from '../models/post.js';
 
 const router = express.Router();
 
@@ -175,6 +175,70 @@ router.get('/:id', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch post',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * PUT /api/posts/:id
+ * Update a post by ID — only is_interesting and metadata (uses updatePostClassification).
+ *
+ * Body: is_interesting (boolean|null), metadata (object, merged with existing)
+ */
+router.put('/:id', async (req, res) => {
+  try {
+    const postId = parseInt(req.params.id);
+    if (isNaN(postId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid post ID',
+        message: 'Post ID must be a valid number'
+      });
+    }
+
+    const { is_interesting, metadata } = req.body;
+    const existing = await getPostById(postId);
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: 'Post not found',
+        message: `Post with ID ${postId} does not exist`
+      });
+    }
+
+    const isInteresting = is_interesting !== undefined ? is_interesting : existing.is_interesting;
+    const metadataToMerge = metadata && typeof metadata === 'object' ? metadata : existing.metadata;
+
+    const updated = await updatePostClassification(postId, isInteresting, metadataToMerge);
+
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        error: 'Post not found',
+        message: `Post with ID ${postId} does not exist`
+      });
+    }
+
+    const { embedding, embedding_v2, ...postWithoutEmbedding } = updated;
+    const formattedPost = {
+      ...postWithoutEmbedding,
+      metadata: updated.metadata
+        ? typeof updated.metadata === 'string'
+          ? JSON.parse(updated.metadata)
+          : updated.metadata
+        : null
+    };
+
+    res.json({
+      success: true,
+      data: formattedPost
+    });
+  } catch (error) {
+    console.error('Error updating post:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update post',
       message: error.message
     });
   }
