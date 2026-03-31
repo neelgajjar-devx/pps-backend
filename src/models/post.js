@@ -94,6 +94,61 @@ export async function updatePostClassification(postId, isInteresting, classifica
 }
 
 /**
+ * Get posts by semantic similarity to a query embedding (uses stored embedding_v2).
+ * pgvector cosine distance operator <=> — lower is more similar.
+ *
+ * @param {Array<number>} queryEmbedding - 768-dim embedding from embedding service
+ * @param {Object} options - { limit = 20, offset = 0, is_interesting, source }
+ * @returns {Promise<Array<Object>>} Posts ordered by similarity (most similar first)
+ */
+export async function getPostsBySemanticSearch(queryEmbedding, options = {}) {
+  const {
+    limit = 20,
+    offset = 0,
+    is_interesting,
+    source
+  } = options;
+
+  if (!queryEmbedding || !Array.isArray(queryEmbedding) || queryEmbedding.length === 0) {
+    return [];
+  }
+
+  const embeddingStr = '[' + queryEmbedding.join(',') + ']';
+  const params = [embeddingStr];
+  let paramCount = 1;
+
+  let query = `
+    SELECT id, source, source_id, title, content, url, author, published_at,
+           is_interesting, metadata, created_at, updated_at,
+           (embedding_v2 <=> $1::vector) AS similarity
+    FROM posts
+    WHERE embedding_v2 IS NOT NULL
+  `;
+
+  if (is_interesting !== undefined && is_interesting !== null) {
+    paramCount++;
+    query += ` AND is_interesting = $${paramCount}`;
+    params.push(is_interesting);
+  }
+  if (source) {
+    paramCount++;
+    query += ` AND source = $${paramCount}`;
+    params.push(source);
+  }
+
+  query += ` ORDER BY embedding_v2 <=> $1::vector ASC`;
+  paramCount++;
+  query += ` LIMIT $${paramCount}`;
+  params.push(limit);
+  paramCount++;
+  query += ` OFFSET $${paramCount}`;
+  params.push(offset);
+
+  const result = await pool.query(query, params);
+  return result.rows;
+}
+
+/**
  * Get posts with filters
  * @param {Object} filters - Filter options
  * @returns {Promise<Array<Object>>}
@@ -123,10 +178,8 @@ export async function getPosts(filters = {}) {
     params.push(source);
   }
 
-  // Semantic search using vector similarity
+  // Text search (keyword match). Use semantic search via API with search= and semantic=true.
   if (search) {
-    // This would require generating an embedding for the search query
-    // For now, we'll do a simple text search
     paramCount++;
     query += ` AND (title ILIKE $${paramCount} OR content ILIKE $${paramCount})`;
     params.push(`%${search}%`);

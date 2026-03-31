@@ -1,18 +1,20 @@
 import express from 'express';
-import { getPosts, getPostCount, getPostById, updatePostClassification } from '../models/post.js';
+import { getPosts, getPostCount, getPostById, getPostsBySemanticSearch, updatePostClassification } from '../models/post.js';
+import { generateEmbedding } from '../services/embedding.js';
 
 const router = express.Router();
 
 /**
  * GET /api/posts
  * Fetch posts with optional filters
- * 
+ *
  * Query parameters:
  * - is_interesting: boolean (filter by classification)
  * - source: string (filter by source)
  * - limit: number (default: 50)
  * - offset: number (default: 0)
- * - search: string (text search in title/content)
+ * - search: string (text search in title/content, or semantic search if semantic=true)
+ * - semantic: boolean (if true and search is set, use embedding similarity instead of text match)
  */
 router.get('/', async (req, res) => {
   try {
@@ -21,7 +23,8 @@ router.get('/', async (req, res) => {
       source,
       limit = 200,
       offset = 0,
-      search
+      search,
+      semantic
     } = req.query;
 
     // Parse is_interesting as boolean
@@ -40,29 +43,42 @@ router.get('/', async (req, res) => {
     const limitInt = parseInt(limit) || 50;
     const offsetInt = parseInt(offset) || 0;
 
-    // Build filters object
-    const filters = {
-      is_interesting: isInterestingFilter,
-      source: source || undefined,
-      limit: limitInt,
-      offset: offsetInt,
-      search: search || undefined
-    };
+    const useSemanticSearch = search && (semantic === 'true' || semantic === '1');
 
-    // Fetch posts and count
-    const [posts, totalCount] = await Promise.all([
-      getPosts(filters),
-      getPostCount(filters)
-    ]);
+    let posts;
+    let totalCount = null;
 
-    // Parse JSON fields from database
-    // Note: pgvector returns embedding as a string in format '[1,2,3,...]'
+    if (useSemanticSearch) {
+      // Use stored post embeddings: embed the search query, then find posts by vector similarity
+      const queryEmbedding = await generateEmbedding(search.trim());
+      posts = await getPostsBySemanticSearch(queryEmbedding, {
+        limit: limitInt,
+        offset: offsetInt,
+        is_interesting: isInterestingFilter,
+        source: source || undefined
+      });
+      totalCount = null; // semantic search has no exact total; hasMore based on result length
+    } else {
+      const filters = {
+        is_interesting: isInterestingFilter,
+        source: source || undefined,
+        limit: limitInt,
+        offset: offsetInt,
+        search: search || undefined
+      };
+      [posts, totalCount] = await Promise.all([
+        getPosts(filters),
+        getPostCount(filters)
+      ]);
+    }
+
+    // Parse JSON fields and strip embedding vectors from response
     const formattedPosts = posts.map(post => {
-      const { embedding, ...postWithoutEmbedding } = post;
-
+      const { embedding, embedding_v2, ...rest } = post;
       return {
-        ...postWithoutEmbedding,
-        metadata: post.metadata ? (typeof post.metadata === 'string' ? JSON.parse(post.metadata) : post.metadata) : null
+        ...rest,
+        metadata: post.metadata ? (typeof post.metadata === 'string' ? JSON.parse(post.metadata) : post.metadata) : null,
+        ...(post.similarity != null && { similarity: Number(post.similarity) })
       };
     });
 
@@ -73,7 +89,7 @@ router.get('/', async (req, res) => {
         total: totalCount,
         limit: limitInt,
         offset: offsetInt,
-        hasMore: offsetInt + limitInt < totalCount
+        hasMore: totalCount != null ? offsetInt + limitInt < totalCount : formattedPosts.length === limitInt
       }
     });
   } catch (error) {
